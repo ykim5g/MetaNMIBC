@@ -2,7 +2,9 @@
 Systemic REview of the Therapeutic Efficacy of Bladder-preserving Treatments for Non-muscle-invasive Bladder Cancer Following Intravesical Bacillus Calmette-Guerin
 
 # Statistical Analysis 
-R program is used to perform all reported analysis. Session informaion about R is as follows. 
+R program and Rstudio are used to perform all reported analysis. Session informaion about R is as follows. 
+
+
 ## > sessionInfo()
 R version 3.6.1 (2019-07-05)
 Platform: x86_64-apple-darwin15.6.0 (64-bit)
