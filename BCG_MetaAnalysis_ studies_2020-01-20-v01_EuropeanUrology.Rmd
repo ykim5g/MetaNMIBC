@@ -1,0 +1,493 @@
+---
+title: "Systematic Review of the Therapeutic Efficacy of Bladder-preserving Treatments for Non-muscle-invasive Bladder Cancer Following Intravesical Bacillus Calmette-Guerin"
+PI: "Roger Li, M.D"
+author: "Biostatistician: Youngchul Kim, Ph.D."
+date: "Jan 23, 2020"
+output: 
+  html_document
+---
+
+```{r, evalu=FALSE, results='hide'}
+# study proposal 07082019.docx
+# https://bookdown.org/MathiasHarrer/Doing_Meta_Analysis_in_R/metareg.html
+```
+
+
+```{r setup, echo=FALSE, eval=TRUE, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+doc.type <- knitr::opts_knit$get('rmarkdown.pandoc.to')
+
+### Add additional packages needed here
+# https://gitlab.moffitt.usf.edu:8000/ReproducibleResearch/MoffittFunctions
+# install.packages("remote")
+# remotes::install_git("https://github.com/wfulp/MoffittFunctions")
+
+# various options needing to be set
+options(xtable.comment = FALSE, datatable.verbose = FALSE, scipen = 10, knitr.kable.NA = '', knitr.table.format = 'latex')   
+
+### Add additional packages needed here
+packages = c("tidyverse","knitr","kableExtra", 'survminer',"MoffittFunctions","compareGroups",'tidycensus','readxl', 'memisc', 'flextable', 'pander') #, 'magrittr')
+
+#if a package is installed, it will be loaded
+#if any are not, the missing package(s) will be installed and loaded
+package.check <- lapply(packages, FUN = function(x) {
+  if (!require(x, character.only = TRUE)) {
+    # MoffittFunctions must be installed in seperately (not in CRAN)
+#    if (x == 'MoffittFunctions')
+#      stop('The package "MoffittFunctions" must be installed through GitLab: 
+# git@gitlab.moffitt.usf.edu:ReproducibleResearch/MoffittFunctions.git')
+    
+    install.packages(x, dependencies = TRUE,repos = "http://cran.us.r-project.org")
+  }
+  library(x, character.only = TRUE)
+})
+
+if (numeric_version(packageVersion('MoffittFunctions')) < '0.1.2')
+  stop('MoffittFunctions must be at least version "0.1.2"')
+
+# Set some knitr options
+# This will always generate two figures (pdf and png, which can be handy for presentations)
+# Note it is bad practice to globally set warning = F. Only set this for chunks you have confirmed warnings have been considered
+opts_chunk$set(tidy = TRUE, cache = FALSE, messages = TRUE, warning = TRUE, echo = FALSE, dev = c("png", "pdf"), dpi = 200)
+
+
+##### Create a theme
+# This can be overloaded with other options
+#moffitt_theme <- theme(legend.position = "bottom", legend.margin = margin(unit = "cm"))
+```
+
+```{r set_word_table_option}
+panderOptions('table.split.table', 200)
+```
+
+
+```{r data_process, echo=FALSE, include=F, results='hide', warning=F}
+#load("../../Data/2019-04-25.RData")
+#load("./Data/2019-04-25.RData")
+
+#install.packages("compute.es")
+#install.packages("MAd")
+require(compute.es)# TO COMPUTE EFFECT SIZES
+require(MAd) # META-ANALYSIS PACKAGE
+require(metafor) # META-ANALYSIS PACKAGE
+require( openxlsx)
+# https://davidgohel.github.io/flextable/articles/overview.html
+require(officer)
+
+setwd("Y:/Projects/Li_Roger/1908_BCG_META_ANALYSIS_2019/")
+dd <- read.xlsx(xlsxFile = "./data/Studies 11252019_KimYC_sLab.xlsx", startRow = 2)
+
+### Assign ID to the case with missing info about Author. This makes all ids unique. 
+id.na <- which( is.na(dd$Authors))
+dd$Authors[id.na] <- id.na
+
+## Figure label
+dd$id.unique <- dd$slab
+id.na.slab <- which(dd$id.unique %in% c(NA, ' ') )
+dd$id.unique[ id.na.slab ] <- paste(dd$Authors, dd$Year, sep="_")[id.na.slab]
+
+#dd$`Dose.reduction.allowed?`
+dd$is.uniform.dose <- TRUE
+dd$is.uniform.dose[ which(dd$Phase %in% c("I", "Ib")) ] <- FALSE
+
+var.names <- c("3mo.CR", "6.mo.CR", "12.mo.CR", "18.mo.CR", "24mo.CR")
+
+dd$is.immunotherapy <- as.numeric( dd$`Cytotoxic.(0).vs..Immunogenic.(1)`)
+  
+id.Bropirimine <- grep("Bropi", dd$Agent.used2)
+
+dd$`12.mo.CR`[10] <- 0.1
+dd$`12.mo.CR` <- as.numeric(dd$`12.mo.CR`)
+
+## Age
+s <- dd$`Age.(Median)`
+dd$Age <- as.numeric(s)
+
+## Therapy
+id.Son <- grep('Son', dd$Authors)
+dd$`Cytotoxic.(0).vs..Immunogenic.(1)`[id.Son]
+dd$`Cytotoxic.(0).vs..Immunogenic.(1)`[id.Son] <- "0"
+
+dd$is.immunotherapy[id.Son] <- 0
+
+## disease grade
+dd$Intermediate <- as.numeric(dd$High)
+dd$High <- as.numeric(dd$High)
+
+
+dd.total <- dd
+```
+
+
+```{r}
+## function to summarize a meta-analysis result
+get.res.table <- function(x, signif.stars=F, digit=2){
+  res.table <- cbind(estimate = c(x$beta), se = x$se, zval = x$zval, 
+                     pval = x$pval, ci.lb = x$ci.lb, ci.ub = x$ci.ub)
+  res.table <- round(res.table, digit)
+  rownames(res.table) <- rownames(x$beta)
+  if (is.element(x$test, c("knha", "adhoc", "t"))) 
+    colnames(res.table)[3] <- "tval"
+  signif <- symnum(x$pval, corr = FALSE, na = FALSE, cutpoints = c(0, 
+                                                                   0.001, 0.01, 0.05, 0.1, 1), symbols = c("***", "**", 
+                                                                                                           "*", ".", " "))
+  if (signif.stars) {
+    res.table <- cbind(formatC(res.table, digits = digits, 
+                               format = "f"), signif)
+    colnames(res.table)[7] <- ""
+  }
+  res.table
+}
+
+
+## Function to produce a table
+get.good.table <- function(x, tablename="var"){
+  #  res
+  #  cbind(es$vi, res$not.na)
+  res.table <- get.res.table(x)
+  rownames(res.table) <- gsub("drug", "", rownames(x$beta))
+  df <- data.frame(var=rownames(res.table), res.table)
+  colnames(df)[1] <- tablename
+  #  doc.type <- "docx"
+  #if (doc.type == "docx") { print( pander(df)) } else { print(kable(df)) }
+  #knitr::kable(df)
+  #pandoc.table(df, style = 'simple')
+  #print(pander(df))
+  #print(df)
+  #require( magrittr)
+  mytable <- df %>% flextable() %>% autofit()
+  #print(mytable)
+  mytable
+}
+```
+
+
+```{r, echo=FALSE}
+### function to extract confidence intervals
+get.res.PR.summary <- function(x=res){
+  # read this function: metafor::escalc.default
+  # metafor::rma.uni
+  # forest.rma
+  
+  #x <- res
+  
+  level <- x$level
+  
+  ni <- x$ni
+  yi <- x$yi.f ## Data on CR rate
+  vi <- x$vi.f
+  X <- x$X.f ## intercept for univariate model
+  k <- length(yi)
+  
+  pred <- fitted(x)
+  
+  pred.ci.lb <- rep(NA_real_, k)
+  pred.ci.ub <- rep(NA_real_, k)
+        
+  if (x$int.only) {
+    pred <- fitted(x)
+    pred.ci.lb <- rep(NA_real_, k)
+    pred.ci.ub <- rep(NA_real_, k)
+  }else {
+    temp <- predict(x, level = level)
+    pred <- temp$pred
+    if (addcred) {
+        pred.ci.lb <- temp$cr.lb
+        pred.ci.ub <- temp$cr.ub
+    } else {
+        pred.ci.lb <- temp$ci.lb
+        pred.ci.ub <- temp$ci.ub
+    }
+  }      
+  
+  if (inherits(x, "rma.glmm")) {
+      weights <- NULL
+  }else {
+      weights <- weights(x)
+  }
+
+  weights
+  
+  k <- length(yi)
+  ci.lb <- yi - qnorm(level/2, lower.tail = FALSE) * sqrt(vi)
+  ci.ub <- yi + qnorm(level/2, lower.tail = FALSE) * sqrt(vi)
+  
+  transf <- FALSE
+  targs <- NULL
+  if (is.function(transf)) {
+    if (is.null(targs)) {
+      yi <- sapply(yi, transf)
+      ci.lb <- sapply(ci.lb, transf)
+      ci.ub <- sapply(ci.ub, transf)
+      pred <- sapply(pred, transf)
+      pred.ci.lb <- sapply(pred.ci.lb, transf)
+      pred.ci.ub <- sapply(pred.ci.ub, transf)
+    }
+    else {
+      yi <- sapply(yi, transf, targs)
+      ci.lb <- sapply(ci.lb, transf, targs)
+      ci.ub <- sapply(ci.ub, transf, targs)
+      pred <- sapply(pred, transf, targs)
+      pred.ci.lb <- sapply(pred.ci.lb, transf, targs)
+      pred.ci.ub <- sapply(pred.ci.ub, transf, targs)
+    }
+  }
+  
+  dat <- data.frame(yi, vi, ci.lb, ci.ub, ni) #, pred, pred.ci.lb, pred.ci.ub, row.names=x$slab)
+  rownames(dat) <- x$slab
+  
+  
+  addfit <- TRUE ## whether to add summary stat
+  addcred <- FALSE ## add credible interval
+  if (addfit && x$int.only) {
+    if (inherits(x, "rma.mv") && x$withG && x$tau2s > 1) {
+      if (!is.logical(addcred)) {
+        if (length(addcred) == 1) 
+          addcred <- c(addcred, addcred)
+        temp <- predict(x, level = level, tau2.levels = addcred[1], 
+                        gamma2.levels = addcred[2])
+        addcred <- TRUE
+      }else {
+        if (addcred) {
+          stop("Need to specify the level of the inner factor(s) via the 'addcred' argument.")
+        }else {
+          temp <- predict(x, level = level, tau2.levels = 1, 
+                          gamma2.levels = 1)
+        }
+      }
+    }else {
+      temp <- predict(x, level = level)
+    }
+    
+    beta <- temp$pred
+    beta.ci.lb <- temp$ci.lb
+    beta.ci.ub <- temp$ci.ub
+    beta.cr.lb <- temp$cr.lb
+    beta.cr.ub <- temp$cr.ub
+    if (is.function(transf)) {
+      if (is.null(targs)) {
+        beta <- sapply(beta, transf)
+        beta.ci.lb <- sapply(beta.ci.lb, transf)
+        beta.ci.ub <- sapply(beta.ci.ub, transf)
+        beta.cr.lb <- sapply(beta.cr.lb, transf)
+        beta.cr.ub <- sapply(beta.cr.ub, transf)
+      }
+      else {
+        beta <- sapply(beta, transf, targs)
+        beta.ci.lb <- sapply(beta.ci.lb, transf, targs)
+        beta.ci.ub <- sapply(beta.ci.ub, transf, targs)
+        beta.cr.lb <- sapply(beta.cr.lb, transf, targs)
+        beta.cr.ub <- sapply(beta.cr.ub, transf, targs)
+      }
+    }
+  }
+  temp
+  
+  result <- rbind( dat, c(as.numeric(unlist(temp)[1:4]), NA) )
+  rownames(result)[nrow(result)] <- "Overall"
+  # row.names=x$slab
+  return(result)
+}
+```
+
+
+```{r}
+# function to extract bias
+get.bias <- function(res, is.plot=FALSE){
+    # ?funnel.rma
+    # data for funnel plot
+    # zz <- cbind( Proportion=es$number.CR/es$n, SE=sqrt(es$vi) )
+    zz <- data.frame(p=res$yi, se=sqrt(res$vi))
+    refline <- res$beta[1,1]
+    xleft  = refline-1.96*zz$se 
+    xright = refline+1.96*zz$se
+    
+    id.bias <- which( c(zz$p < xleft) | c(zz$p > xright) )
+    id.bias
+    
+    if( is.plot==TRUE){  
+      ymax <- sqrt( max(res$vi) )
+      plot(zz[,1], zz[,2], xlim=c(0.5, 1.3), ylim=c(0, ymax), pch=1)
+      points(zz[id.bias,1], zz[id.bias,2], pch=16, col="red")
+      abline(v=res$beta)    
+       
+      refline <- res$beta
+      # #abline(v=refline)
+      xleft <- refline-1.96*sqrt( max(res$vi) )
+      xright <- refline+1.96*sqrt( max(res$vi) ) 
+      #abline( v = refline-1.96*sqrt( max(res$vi) ) )
+      #abline( v = refline+1.96*sqrt( max(res$vi) ) )
+      abline(h=c(0, ymax))
+      
+      #x1 = xleft
+      segments(x0 = refline, y0=0, x1=xleft, y1=ymax ) 
+      segments(x0 = refline, y0=0, x1=xright, y1=ymax ) 
+    }
+    
+    return(id.bias)
+}    
+```
+
+## disease site
+```{r}
+rownames(dd) <- as.character(dd$id)
+dd$Disease.Site[ which(dd$id %in% as.character(c(4, 5, 13, 14, 22, 29, 35, 38, 42, 43, 51))) ] <- "CIS +/- papillary"
+dd$Disease.Site[ which(dd$id %in% as.character(c(2, 3, 16, 17, 18, 49))) ] <- "Papillary Only"
+dd$Disease.Site[ which(dd$id %in% as.character(c(1, 6, 9, 10, 11, 12, 15, 19, 20, 21, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 36, 37, 39, 40, 41, 50))) ] <- "Both"
+```
+
+
+##### clearpage
+```{r}
+get.Meta <- function(var.y=var.y, strata="Disease.Site", slab=NULL, covariate=NULL, data=mData){
+  result <- list()
+  var.analysis <- c("N", var.y, covariate)
+  id.non.missing <-  which( rowSums(is.na(data[,var.analysis]))==0 )
+    
+  cData <- data[id.non.missing, ]
+  cData <- cData[ order(cData[, strata], cData[,var.y]), ]
+
+  if(is.null(slab)) slab <- paste("Study", 1:nrow(data)) #data$id.unique)
+  zz.fixed <- zz.mixed <- zz.mixed.unbiased <- vector()
+  
+  ### if there is a valid observation, run a meta-analysis.  
+  if(nrow(cData)>=1){
+    n <- cData$N #number.of.evaluable.patients
+    p <- cData[,var.y] #dd$`3mo.CR`
+    
+    cData$number.CR <- trunc(n*p)
+    cData$n <- n
+
+    ### Fixed effect model after Freeman-Tukey Double arcsine transformation (sm="PFT")
+    zz.fixed <- meta::metaprop(event=number.CR, n=n, 
+                             studlab =gsub('et al', '', cData$id.unique), 
+                             data = cData,
+                             comb.fixed = F, comb.random=T,
+                             sm="PFT", layout = "JAMA") 
+
+    ### Random effect model
+    es <- escalc(measure="PR", 
+                 xi=number.CR, ni=n, data=cData, 
+                 slab=gsub('et al', '', cData$id.unique))
+
+    
+    ## Mixed effect Model: DerSimonian-Laired estimator
+    zz.mixed  <- rma.uni(es, method="DL", level=95) ## with 95% confidence level
+
+    ## After revmoing biased studies
+    id.bias.funnel <- get.bias(zz.mixed, is.plot=FALSE)
+    es <- es[-id.bias.funnel, ]; 
+    if(nrow(es)>0){
+      cData.unbiased <- cData[rownames(es), ]
+      zz.mixed.unbiased <- rma.uni(es)
+    } else{
+      cat("There is no available data on ", var.y, "(k=", length(id),")\n")
+    }
+  }
+  result <- list(fixed=zz.fixed, mixed=zz.mixed, mixed.unbiased =zz.mixed.unbiased, data=mData, cData=cData)
+  
+  result
+}
+
+```
+
+
+# Figure 4A. Analysis 1B.a: 	
+##  CIS +/- papillary: (5, 13, 14, 22, 29, 38, 42)
+
+```{r, echo=FALSE, warning=FALSE, fig.height=5}
+# par( mfrow=c(2,3))
+rownames(dd) <- as.character(dd$id)
+dd$N <- dd$number.of.evaluable.patients
+col.polygon <- c("red", "black", "blue")
+names(col.polygon) <- unique(dd$Disease.Site)[1:3]
+#unlist( lapply( gregexpr(pattern ='et al', dd$Authors), function(x) x[1] ))
+#paste( unlist( lapply(strsplit(x=dd$Authors, split = " "), function(x) x[1] ) ), dd$Publication.Year, sep=" et al. ")
+id.set <- as.character(c(5, 13, 14, 22, 29, 38, 42))
+mData <- dd[which(dd$id %in% id.set), ]
+var.names <- c("3mo.CR", "6.mo.CR", "12.mo.CR", "18.mo.CR", "24mo.CR")
+is.addfit <- FALSE
+source("./fit.meta_2019-12-05.R")
+```
+
+```{r, echo=FALSE, warning=FALSE, fig.height=6}
+# par( mfrow=c(2,3))
+rownames(dd) <- as.character(dd$id)
+dd$N <- dd$number.of.evaluable.patients
+col.polygon <- c("red", "black", "blue")
+names(col.polygon) <- unique(dd$Disease.Site)[1:3]
+```
+
+
+
+##### clearpage
+# Figure 4B: Analysis 1A.b: 
+## Papillary only: (2, 3, 16, 17, 18, 49)
+```{r, echo=FALSE, warning=FALSE, fig.height=4.5}
+rownames(dd) <- as.character(dd$id)
+dd$N <- dd$number.of.evaluable.patients
+col.polygon <- c("red", "black", "blue")
+names(col.polygon) <- unique(dd$Disease.Site)[1:3]
+
+id.set <- as.character(c(2, 3, 16, 17, 18, 49))
+
+mData <- dd[which(dd$id %in% id.set), ]
+#var.names <- 
+var.names <- c("3mo.CR", "6.mo.CR", "12.mo.CR", "18.mo.CR", "24mo.CR")
+new.var.names <-c("3mo.RFR", "6.mo.RFR", "12.mo.RFR", "18.mo.RFR", "24mo.RFR")
+colnames(mData)[ match( var.names, colnames(mData) ) ] <- new.var.names
+var.names <- new.var.names
+is.addfit <- FALSE
+source("./fit.meta_2019-12-05.R")
+```
+
+
+
+##### clearpage
+
+# Figure 4C: Analysis 1B.c: Both: 
+## study ids:(1, 6, 9, 10, 11, 12, 15, 20, 21, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 39, 40, 50)
+```{r, echo=FALSE, warning=FALSE, fig.height=7}
+rownames(dd) <- as.character(dd$id)
+dd$N <- dd$number.of.evaluable.patients
+col.polygon <- c("red", "black", "blue")
+names(col.polygon) <- unique(dd$Disease.Site)[1:3]
+
+id.set <- as.character(c(1, 6, 9, 10, 11, 12, 15, 20, 21, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 39, 40, 50))
+
+mData <- dd[which(dd$id %in% id.set), ]
+#var.names <- c("PFR")
+var.names <- c("3mo.CR", "6.mo.CR", "12.mo.CR", "18.mo.CR", "24mo.CR")
+new.var.names <-c("3mo.DFR", "6.mo.DFR", "12.mo.DFR", "18.mo.DFR", "24mo.DFR")
+colnames(mData)[ match( var.names, colnames(mData) ) ] <- new.var.names
+var.names <- new.var.names
+is.addfit <- FALSE
+source("./fit.meta_2019-12-05.R")
+```
+
+
+
+
+##### clearpage
+
+# Figure 5: Aim 1B.	
+## All studies excluding those with high risk of bias (4, 19, 34, 35, 36, 37, 41, 43, 48, 51, 52)
+
+```{r, echo=FALSE, warning=FALSE, fig.height=10}
+# par( mfrow=c(2,3))
+rownames(dd) <- as.character(dd$id)
+dd$N <- dd$number.of.evaluable.patients
+col.polygon <- c("red", "black", "blue")
+names(col.polygon) <- unique(dd$Disease.Site)[1:3]
+
+#unlist( lapply( gregexpr(pattern ='et al', dd$Authors), function(x) x[1] ))
+#paste( unlist( lapply(strsplit(x=dd$Authors, split = " "), function(x) x[1] ) ), dd$Publication.Year, sep=" et al. ")
+
+id.set <- as.character(c(5,13,14,22,29,38,42,2,3,16,17,18,49,1,6,9,10,11,12,15,20,21,23,24,25,26,27,28,30,31,32,33,39,40,50))
+mData <- dd[which(dd$id %in% id.set), ]
+mData <- mData[order(mData$Disease.Site), ]
+var.names <- c("PFR")
+is.addfit <- FALSE
+source("./fit.meta_2019-12-05.R")
+```
+
