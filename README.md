@@ -1,6 +1,7 @@
 # Meta analysis of therapeutic efficacy of bladder-sparing treatment for NMIBC
 
-Systemic REview of the Therapeutic Efficacy of Bladder-preserving Treatments for Non-muscle-invasive Bladder Cancer Following Intravesical Bacillus Calmette-Guerin
+Systemic REview of the Therapeutic Efficacy of Bladder-preserving Treatments for Non-muscle-invasive Bladder Cancer Following Intravesical Bacillus Calmette-Guerin, Eur Urol. 2020 Mar 3. pii: S0302-2838(20)30118-4. doi: 10.1016/j.eururo.2020.02.012.
+
 
 https://www.europeanurology.com/article/S0302-2838(20)30118-4/fulltext
 
